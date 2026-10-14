@@ -1,42 +1,30 @@
 """
 Example 5 – Advanced Configuration (Speed PID Tuning)
 =======================================================
-Reads the current Speed PID gains from VESC flash, applies new
-values for Kp, Ki, and Kd individually, then reads them back to
-verify the write was successful.
+This example reads the VESC configuration, then writes new Kp/Ki/Kd values to
+Speed PID settings and verifies them.
 
-Enable DEBUG = True to see every raw UART packet (hex) sent and
-received during the read-modify-write cycle.
+What you should edit:
+    - SERIAL_PORT: set to the correct COM port.
+    - DEBUG: set to True to print every raw UART packet for debugging.
+    - NEW_KP / NEW_KI / NEW_KD: change these to the values you want to test.
+
+What the code is doing:
+    1. Connects to the VESC over UART.
+    2. Reads the current config using get_mcconf().
+    3. Prints the current Kp/Ki/Kd values.
+    4. Calls set_kp(), set_ki(), set_kd() to write new values.
+    5. Reads the config again to verify the write.
+
+Important notes:
+    - Kp, Ki, and Kd are speed-loop tuning parameters.
+    - Too high: may cause oscillation or jitter.
+    - Too low: motor response may feel weak or sluggish.
+    - Typical ranges are around 0.0001 to 0.01, but exact values depend on the
+      motor and setup.
 
 Usage:
-    python 05_advanced_pid_tuning.py
-
-Expected output (debug off):
-    === Speed PID Tuning ===
-
-    Current PID gains:
-      Kp = 0.004000
-      Ki = 0.004000
-      Kd = 0.000100
-
-    Applying new gains: Kp=0.005, Ki=0.003, Kd=5e-05
-      set_kp result: OK
-      set_ki result: OK
-      set_kd result: OK
-
-    Verified gains after write:
-      Kp = 0.005000  (target: 0.005000)  ✓
-      Ki = 0.003000  (target: 0.003000)  ✓
-      Kd = 0.000050  (target: 0.000050)  ✓
-
-With debug enabled you will also see hex output such as:
-    Sending: 02 05 0e 00 00 00 00 a1 b2 03
-    Received payload: 458 bytes
-    First 20 bytes: 0e 00 00 00 ...
-    Parsed Kp: 0.0040000001
-    SUCCESS: Kp changed from 0.004000 to 0.005000
-
-Typical Kp/Ki/Kd ranges: 0.0001 – 0.01
+    python 5_advanced_pid_tuning.py
 """
 
 import time
@@ -45,10 +33,16 @@ sys.path.append("..")
 
 from vesc_uart import VescUart
 
-SERIAL_PORT = "/dev/ttyUSB0"   # Windows: "COM3"
-DEBUG       = False             # Set True for raw hex packet inspection
+# -----------------------------------------------------------------------------
+# Edit these values before running.
+# SERIAL_PORT must match your VESC serial port.
+# DEBUG True is useful when debugging packet framing / CRC / bad writes.
+# -----------------------------------------------------------------------------
+SERIAL_PORT = "COM5"
+DEBUG = False
 
-# New PID gains to apply
+# New PID values to try.
+# These are the numbers that will be written to the VESC.
 NEW_KP = 0.005000
 NEW_KI = 0.003000
 NEW_KD = 0.000050
@@ -58,7 +52,10 @@ vesc.set_debug(DEBUG)
 
 print("=== Speed PID Tuning ===\n")
 
-# --- Step 1: Read current gains ---
+# -----------------------------------------------------------------------------
+# Step 1: read current values
+# get_mcconf() returns a dictionary with the current VESC config values.
+# -----------------------------------------------------------------------------
 config = vesc.get_mcconf()
 if config:
     print("Current PID gains:")
@@ -70,7 +67,11 @@ else:
     vesc.close()
     sys.exit(1)
 
-# --- Step 2: Write new gains ---
+# -----------------------------------------------------------------------------
+# Step 2: write new values
+# set_kp(), set_ki(), and set_kd() each read the current config, modify the
+# relevant float value, and write the full config back to the VESC.
+# -----------------------------------------------------------------------------
 print(f"Applying new gains: Kp={NEW_KP}, Ki={NEW_KI}, Kd={NEW_KD}")
 
 ok_kp = vesc.set_kp(NEW_KP)
@@ -81,7 +82,10 @@ print(f"  set_kp result: {'OK' if ok_kp else 'FAILED'}")
 print(f"  set_ki result: {'OK' if ok_ki else 'FAILED'}")
 print(f"  set_kd result: {'OK' if ok_kd else 'FAILED'}")
 
-# --- Step 3: Verify written values ---
+# -----------------------------------------------------------------------------
+# Step 3: verify that the write took effect.
+# We read the config again and compare the returned values to the target values.
+# -----------------------------------------------------------------------------
 time.sleep(0.3)
 verify = vesc.get_mcconf()
 

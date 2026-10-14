@@ -118,6 +118,10 @@ class VescUart:
             timeout: Serial read timeout in seconds (default: 0.1)
         """
         self.ser = serial.Serial(serial_port, baudrate, timeout=timeout)
+        # Keep port and serial settings for reconnects after reboot
+        self._serial_port = serial_port
+        self._baudrate = baudrate
+        self._timeout = timeout
         self.data = VescData()
         self.nunchuck = NunchuckData()
         self.debug = False
@@ -195,7 +199,9 @@ class VescUart:
         payload_len = len(payload)
         crc = self._crc16(payload)
         
-        if payload_len <= 256:
+        # Use single-byte length only for values that fit in one byte (0-255).
+        # A payload length of 256 requires the two-byte length form.
+        if payload_len <= 255:
             message = bytes([2, payload_len]) + payload
         else:
             message = bytes([3, payload_len >> 8, payload_len & 0xFF]) + payload
@@ -511,11 +517,12 @@ class VescUart:
         try:
             # Speed PID at position 330 (confirmed from analysis)
             if len(payload) >= 351:  # Need at least up to position 350
-                config['s_pid_kp'] = struct.unpack('>f', payload[330:334])[0]
-                config['s_pid_ki'] = struct.unpack('>f', payload[334:338])[0]
-                config['s_pid_kd'] = struct.unpack('>f', payload[338:342])[0]
-                config['s_pid_kd_filter'] = struct.unpack('>f', payload[342:346])[0]
-                config['s_pid_min_erpm'] = struct.unpack('>f', payload[346:350])[0]
+                # VESC uses little-endian float representation on most firmwares
+                config['s_pid_kp'] = struct.unpack('<f', payload[330:334])[0]
+                config['s_pid_ki'] = struct.unpack('<f', payload[334:338])[0]
+                config['s_pid_kd'] = struct.unpack('<f', payload[338:342])[0]
+                config['s_pid_kd_filter'] = struct.unpack('<f', payload[342:346])[0]
+                config['s_pid_min_erpm'] = struct.unpack('<f', payload[346:350])[0]
                 config['s_pid_allow_braking'] = payload[350] != 0
                 
                 # Store the full payload for modification
@@ -539,7 +546,7 @@ class VescUart:
                 traceback.print_exc()
             return None
     
-    def set_kp(self, kp_value):
+    def set_kp(self, kp_value, apply_reboot: bool = False):
         """
         Set Speed PID Kp value
         
@@ -568,7 +575,8 @@ class VescUart:
         payload = bytearray(config['_raw_payload'])
         
         # Modify Kp at position 330
-        kp_bytes = struct.pack('>f', kp_value)
+        # Pack floats as little-endian to match VESC firmware
+        kp_bytes = struct.pack('<f', kp_value)
         payload[330:334] = kp_bytes
         
         # Remove the command byte (index 0) from payload since we'll add it
@@ -593,7 +601,13 @@ class VescUart:
         
         # Wait a bit more for settings to apply
         time.sleep(0.1)
-        
+
+        # Optionally reboot the device so new config is applied and reconnect
+        if apply_reboot:
+            ok = self._reboot_device(wait_seconds=1.0)
+            if not ok and self.debug:
+                print("Warning: reboot requested but reconnection failed")
+
         # Verify by reading back (only if debug mode)
         if self.debug:
             verify_config = self.get_mcconf()
@@ -605,10 +619,52 @@ class VescUart:
                 else:
                     print(f"ERROR: Kp mismatch (expected {kp_value:.6f}, got {new_kp:.6f})")
                     return False
-        
+
         return True
+
+    def _reboot_device(self, wait_seconds: float = 1.0):
+        """Send reboot command to VESC so it reloads configuration from flash.
+
+        Note: reboot will disconnect/reconnect USB; caller should handle reconnection.
+        """
+        try:
+            if self.debug:
+                print("Sending reboot command to VESC...")
+            # send reboot
+            self._send_command(bytes([CommPacketId.COMM_REBOOT]))
+        except Exception:
+            # ignore send errors during reboot
+            pass
+
+        # Close serial and attempt to reopen until device responds or timeout
+        try:
+            try:
+                self.ser.close()
+            except Exception:
+                pass
+
+            # Wait briefly for device to reboot
+            time.sleep(wait_seconds)
+
+            # Try reconnecting a few times
+            reconnect_attempts = 10
+            for i in range(reconnect_attempts):
+                try:
+                    self.ser = serial.Serial(self._serial_port, self._baudrate, timeout=self._timeout)
+                    if self.debug:
+                        print(f"Reconnected to {self._serial_port} on attempt {i+1}")
+                    return True
+                except Exception:
+                    time.sleep(0.5)
+
+        except Exception:
+            pass
+
+        if self.debug:
+            print("Failed to reconnect after reboot")
+        return False
         
-    def set_ki(self, ki_value):
+    def set_ki(self, ki_value, apply_reboot: bool = False):
         """
         Set Speed PID Ki value
         
@@ -634,7 +690,7 @@ class VescUart:
         payload = bytearray(config['_raw_payload'])
         
         # Modify Ki at position 334
-        ki_bytes = struct.pack('>f', ki_value)
+        ki_bytes = struct.pack('<f', ki_value)
         payload[334:338] = ki_bytes
         
         # Remove the command byte (index 0) from payload since we'll add it
@@ -656,7 +712,13 @@ class VescUart:
         
         # Wait a bit more for settings to apply
         time.sleep(0.1)
-        
+
+        # Optionally reboot the device so new config is applied and reconnect
+        if apply_reboot:
+            ok = self._reboot_device(wait_seconds=1.0)
+            if not ok and self.debug:
+                print("Warning: reboot requested but reconnection failed")
+
         # Verify by reading back (only if debug mode)
         if self.debug:
             verify_config = self.get_mcconf()
@@ -668,10 +730,10 @@ class VescUart:
                 else:
                     print(f"ERROR: Ki mismatch (expected {ki_value:.6f}, got {new_ki:.6f})")
                     return False
-        
+
         return True
     
-    def set_kd(self, kd_value):
+    def set_kd(self, kd_value, apply_reboot: bool = False):
         """
         Set Speed PID Kd value
         
@@ -697,7 +759,7 @@ class VescUart:
         payload = bytearray(config['_raw_payload'])
         
         # Modify Kd at position 338
-        kd_bytes = struct.pack('>f', kd_value)
+        kd_bytes = struct.pack('<f', kd_value)
         payload[338:342] = kd_bytes
         
         # Remove the command byte (index 0) from payload since we'll add it
@@ -719,7 +781,13 @@ class VescUart:
         
         # Wait a bit more for settings to apply
         time.sleep(0.1)
-        
+
+        # Optionally reboot the device so new config is applied and reconnect
+        if apply_reboot:
+            ok = self._reboot_device(wait_seconds=1.0)
+            if not ok and self.debug:
+                print("Warning: reboot requested but reconnection failed")
+
         # Verify by reading back (only if debug mode)
         if self.debug:
             verify_config = self.get_mcconf()
@@ -731,7 +799,7 @@ class VescUart:
                 else:
                     print(f"ERROR: Kd mismatch (expected {kd_value:.6f}, got {new_kd:.6f})")
                     return False
-        
+
         return True
 
     def print_values(self):
@@ -758,3 +826,24 @@ if __name__ == "__main__":
     # Example usage
     print("VescUart Python Library")
     print("Example: vesc = VescUart('/dev/ttyUSB0')")
+    # Replace the SERIAL_PORT value below with your system port,
+    # e.g. "COM5" on Windows or "/dev/ttyUSB0" on Linux/macOS.
+    SERIAL_PORT = "COM5"
+
+    try:
+        vesc = VescUart(SERIAL_PORT)  # Connect to VESC
+
+        if vesc.get_values():  # Request telemetry
+            print(f"RPM: {vesc.data.rpm}")
+            print(f"Voltage: {vesc.data.input_voltage} V")
+
+        # Uncomment the next line to command the motor (use with caution)
+        # vesc.set_rpm(3000)
+
+    except Exception as e:
+        print(f"Could not open serial port {SERIAL_PORT}: {e}")
+    finally:
+        try:
+            vesc.close()
+        except Exception:
+            pass
