@@ -3,7 +3,7 @@ Interactive example runner for pyVESC-uart
 
 Run this from the `examples/` folder or from the project root. It will
 prompt for a serial port and example-specific parameters, then execute
-one of the five provided examples using `VescUart`.
+one of the six provided examples using `VescUart`.
 
 Usage:
     python run_example.py
@@ -17,15 +17,17 @@ import time
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from vesc_uart import VescUart
+from benchmark_pid_response import main as run_benchmark
 
 EXAMPLES = {
     '1': 'Run at RPM (spin motor for a short duration)',
     '2': 'Run at Duty Cycle (ramp duty from 0% to 50%)',
     '3': 'Basic Config (read live status and PID)',
     '4': 'Read Telemetry (continuous monitor until Ctrl+C)',
-    '5': 'Advanced PID Tuning (read/write/verify PID gains)'
+    '5': 'Advanced PID Tuning (read/write/verify PID gains)',
+    '6': 'Set PID (write values only)',
+    '7': 'PID Benchmark (before/after response test)'
 }
-EXAMPLES['6'] = 'Set PID (write values only)'
 
 
 def ask(prompt, default=None, cast=str):
@@ -207,14 +209,65 @@ def run_example_5(port, new_kp=0.005, new_ki=0.003, new_kd=0.00005, debug=False)
             vesc.close()
 
 
+def run_example_6(port, kp, ki, kd):
+    vesc = None
+    try:
+        vesc = VescUart(port)
+        vesc.set_debug(False)
+        print("Writing new PID values to VESC...\n")
+        print(f"  Kp = {kp}")
+        print(f"  Ki = {ki}")
+        print(f"  Kd = {kd}")
+
+        print("  Writing Kp...")
+        ok_kp = vesc.set_kp(kp)
+        print("  Writing Ki...")
+        ok_ki = vesc.set_ki(ki)
+        print("  Writing Kd...")
+        ok_kd = vesc.set_kd(kd)
+        print(f"Results: Kp={'OK' if ok_kp else 'FAIL'}, Ki={'OK' if ok_ki else 'FAIL'}, Kd={'OK' if ok_kd else 'FAIL'}")
+
+        time.sleep(0.3)
+        verify = vesc.get_mcconf()
+        if verify:
+            print("\nVerified values after write:")
+            print(f"  Kp = {verify.get('s_pid_kp'):.6f}")
+            print(f"  Ki = {verify.get('s_pid_ki'):.6f}")
+            print(f"  Kd = {verify.get('s_pid_kd'):.6f}")
+        else:
+            print("ERROR: Could not verify written configuration.")
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        if vesc:
+            vesc.close()
+
+
+def run_example_7(port, duration=5, target_rpm=3000):
+    vesc = None
+    try:
+        vesc = VescUart(port)
+        print(f"Running PID benchmark: {duration}s at target RPM {target_rpm}...")
+        run_benchmark(duration=duration, target_rpm=target_rpm, port=port)
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        if vesc:
+            vesc.close()
+
+
 def main():
     print("pyVESC-uart - Interactive Example Runner\n")
     for k, v in EXAMPLES.items():
         print(f"{k}. {v}")
 
-    choice = input("\nChoose an example to run (1-6): ").strip()
+    choice = input("\nChoose an example to run (1-7): ").strip()
     if choice not in EXAMPLES:
         print("Invalid choice.")
+        return
+
+    if choice == '7':
+        run_benchmark()
         return
 
     default_port = "COM5"
@@ -286,6 +339,10 @@ def main():
                     pass
         else:
             print("Aborted by user.")
+    elif choice == '7':
+        duration = ask("Benchmark duration (s)", 5, int)
+        target_rpm = ask("Benchmark target RPM", 3000, int)
+        run_example_7(port, duration=duration, target_rpm=target_rpm)
 
 
 if __name__ == '__main__':

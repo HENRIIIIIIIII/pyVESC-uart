@@ -1,0 +1,3 @@
+run,target_rpm,rise_time_s,overshoot_percent,settle_time_s,peak_rpm,final_error_erpm,avg_current_a,avg_duty_percent,kp,ki,kd
+baseline,2000,,-99.9,,2.0,-2000.0,0.05655172413793103,5.741379310344827,100.0,8.281806909656216e-28,100.0
+after_update,2000,,-99.6,,8.0,-2000.0,0.049186046511627904,-3.352325581395349,100.0,8.281806909656216e-28,100.0
